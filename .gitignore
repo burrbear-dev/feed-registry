@@ -1,0 +1,12 @@
+# soldeer dependencies
+dependencies/
+
+# forge cache
+cache/
+out/
+
+# env
+.env
+
+# lib
+lib/
