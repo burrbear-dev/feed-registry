@@ -164,7 +164,7 @@ contract FeedRegistryTest is Test {
             "Quote token to deployer mapping is incorrect"
         );
         assertEq(
-            registry.deployers(0),
+            registry.getDeployers()[0],
             address(deployer),
             "Deployer not added"
         );

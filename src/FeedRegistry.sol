@@ -18,13 +18,8 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address[] associatedTokens;
     }
 
-    // list of deployers
-    address[] public deployers;
-    // map deployer to quote token
-    mapping(address => address) public deployerToQuoteToken;
-    // map quote token to deployer
-    mapping(address => address) public quoteTokenToDeployer;
-
+    // list of deployer addresses
+    address[] private _deployers;
     // Mapping to store all feeds
     // deployer => baseFeed => Feed
     mapping(address => mapping(address => Feed)) private _feeds;
@@ -33,6 +28,11 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
 
     // Mapping to store pending feeds
     Feed[] public feedsPending;
+
+    // map deployer to quote token
+    mapping(address => address) public deployerToQuoteToken;
+    // map quote token to deployer
+    mapping(address => address) public quoteTokenToDeployer;
 
     event FeedApproved(address indexed quoteToken, address indexed baseFeed);
     event TokenAssociated(
@@ -89,7 +89,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
             "Invalid quote token"
         );
 
-        deployers.push(deployer);
+        _deployers.push(deployer);
         deployerToQuoteToken[deployer] = quoteToken;
         quoteTokenToDeployer[quoteToken] = deployer;
     }
@@ -97,11 +97,11 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     function removeDeployer(address deployer) external onlyOwner {
         delete quoteTokenToDeployer[deployerToQuoteToken[deployer]];
         delete deployerToQuoteToken[deployer];
-        uint256 len = deployers.length;
+        uint256 len = _deployers.length;
         for (uint256 i = 0; i < len; i++) {
-            if (deployers[i] == deployer) {
-                deployers[i] = deployers[len - 1];
-                deployers.pop();
+            if (_deployers[i] == deployer) {
+                _deployers[i] = _deployers[len - 1];
+                _deployers.pop();
                 break;
             }
         }
@@ -322,7 +322,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     }
 
     function getDeployers() external view returns (address[] memory) {
-        return deployers;
+        return _deployers;
     }
 
     function getFeeds(
