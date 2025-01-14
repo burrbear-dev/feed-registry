@@ -199,9 +199,9 @@ contract FeedRegistryTest is Test {
 
     function testCannotAddDuplicateDeployer() public {
         registry.addDeployer(address(quoteToken), address(deployer));
-        vm.expectRevert("Deployer already exists");
+        vm.expectRevert(DeployerAlreadyExists.selector);
         registry.addDeployer(address(quoteToken), address(deployer));
-        vm.expectRevert("Quote token already exists");
+        vm.expectRevert(QuoteTokenAlreadyExists.selector);
         registry.addDeployer(address(quoteToken), address(deployer2));
     }
 
@@ -277,7 +277,7 @@ contract FeedRegistryTest is Test {
 
         // user cannot suggest feed again
         vm.startPrank(user);
-        vm.expectRevert();
+        vm.expectRevert(FeedAlreadyExists.selector);
         registry.suggestFeed(address(quoteToken), address(mockFeed), tokens);
         vm.stopPrank();
 
@@ -305,7 +305,7 @@ contract FeedRegistryTest is Test {
     function testCannotSuggestInvalidFeed() public {
         vm.startPrank(user);
         address[] memory tokens = new address[](0);
-        vm.expectRevert();
+        vm.expectRevert(DeployerNotFound.selector);
         registry.suggestFeed(address(0), address(mockFeed), tokens);
         // dont allow suggesting a token as a feed
         vm.expectRevert();
@@ -314,7 +314,7 @@ contract FeedRegistryTest is Test {
     }
 
     function testCannotApproveNonexistentFeed() public {
-        vm.expectRevert();
+        vm.expectRevert(FeedDoesNotExist.selector);
         registry.approveFeed(0);
     }
 
@@ -328,7 +328,7 @@ contract FeedRegistryTest is Test {
         registry.suggestFeed(address(quoteToken), address(mockFeed), tokens);
 
         // cannot associate token to unapproved feed
-        vm.expectRevert();
+        vm.expectRevert(FeedNotApproved.selector);
         registry.associateToken(
             address(quoteToken),
             address(mockFeed),
@@ -359,7 +359,7 @@ contract FeedRegistryTest is Test {
         assertEq(associatedTokens[0], address(token1));
 
         // cannot associate same token again
-        vm.expectRevert();
+        vm.expectRevert(TokenAlreadyAssociated.selector);
         registry.associateToken(
             address(quoteToken),
             address(mockFeed),

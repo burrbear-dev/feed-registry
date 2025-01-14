@@ -6,6 +6,17 @@ import "@openzeppelin-upgradeable/contracts/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/AggregatorV3Interface.sol";
 
+error DeployerAlreadyExists();
+error QuoteTokenAlreadyExists();
+error QuoteTokenMismatch();
+error DeployerNotFound();
+error FeedAlreadyExists();
+error InvalidAddress();
+error FeedNotApproved();
+error TokenAlreadyAssociated();
+error FeedDoesNotExist();
+error CallToDeployerFailed();
+
 /**
  * @title FeedRegistry
  * @notice A registry for Chainlink price feeds with associated ERC20 tokens and FXPoolDeployer integration
@@ -75,20 +86,14 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address deployer
     ) external onlyOwner {
         _validToken(quoteToken);
-        require(deployer != address(0), "Invalid deployer address");
-        require(quoteToken != address(0), "Invalid quote token address");
-        require(
-            deployerToQuoteToken[deployer] == address(0),
-            "Deployer already exists"
-        );
-        require(
-            quoteTokenToDeployer[quoteToken] == address(0),
-            "Quote token already exists"
-        );
-        require(
-            IHasQuoteToken(deployer).quoteToken() == quoteToken,
-            "Deployer.quoteToken() does not match quoteToken"
-        );
+        if (deployer == address(0)) revert InvalidAddress();
+        if (quoteToken == address(0)) revert InvalidAddress();
+        if (deployerToQuoteToken[deployer] != address(0))
+            revert DeployerAlreadyExists();
+        if (quoteTokenToDeployer[quoteToken] != address(0))
+            revert QuoteTokenAlreadyExists();
+        if (IHasQuoteToken(deployer).quoteToken() != quoteToken)
+            revert QuoteTokenMismatch();
 
         _deployers.push(deployer);
         _quoteTokens.push(quoteToken);
@@ -129,12 +134,10 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address[] calldata associatedTokens
     ) external {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
+        if (deployer == address(0)) revert DeployerNotFound();
         _validFeed(feedAddress);
-        require(
-            _feeds[deployer][feedAddress].deployerAddress == address(0),
-            "Feed already exists"
-        );
+        if (_feeds[deployer][feedAddress].deployerAddress != address(0))
+            revert FeedAlreadyExists();
 
         // Verify that the address implements AggregatorV3Interface
         AggregatorV3Interface feed = AggregatorV3Interface(feedAddress);
@@ -142,7 +145,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
 
         // Verify all token addresses implement IERC20
         for (uint256 i = 0; i < associatedTokens.length; i++) {
-            require(associatedTokens[i] != address(0), "Invalid token address");
+            if (associatedTokens[i] == address(0)) revert InvalidAddress();
             IERC20(associatedTokens[i]).totalSupply(); // Will revert if not a valid ERC20
         }
 
@@ -169,9 +172,11 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
      * @param _pendingIndex The index of the feed to approve
      */
     function approveFeed(uint256 _pendingIndex) external onlyOwner {
+        if (_pendingIndex >= feedsPending.length) revert FeedDoesNotExist();
+
         Feed memory pendingFeed = feedsPending[_pendingIndex];
         address baseFeed = pendingFeed.feedAddress;
-        require(baseFeed != address(0), "Feed does not exist");
+        if (baseFeed == address(0)) revert FeedDoesNotExist();
         pendingFeed.isApproved = true;
 
         address deployer = pendingFeed.deployerAddress;
@@ -206,10 +211,10 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address baseFeed
     ) external onlyOwner {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
+        if (deployer == address(0)) revert DeployerNotFound();
 
         Feed memory feed = _feeds[deployer][baseFeed];
-        require(feed.isApproved, "Feed not approved");
+        if (!feed.isApproved) revert FeedNotApproved();
         delete _feeds[deployer][baseFeed];
 
         // call adminDisapproveBaseOracle on deployer
@@ -243,16 +248,16 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     ) external onlyOwner {
         _validToken(tokenAddress);
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
+        if (deployer == address(0)) revert DeployerNotFound();
 
         Feed memory feed = _feeds[deployer][baseFeed];
-        require(feed.isApproved, "Feed not approved");
-        require(tokenAddress != address(0), "Invalid token address");
+        if (!feed.isApproved) revert FeedNotApproved();
+        if (tokenAddress == address(0)) revert InvalidAddress();
 
         // Check if token is already associated
         address[] storage tokens = _feeds[deployer][baseFeed].associatedTokens;
         for (uint i = 0; i < tokens.length; i++) {
-            require(tokens[i] != tokenAddress, "Token already associated");
+            if (tokens[i] == tokenAddress) revert TokenAlreadyAssociated();
         }
 
         tokens.push(tokenAddress);
@@ -265,8 +270,8 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address tokenAddress
     ) external onlyOwner {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
-        require(_feeds[deployer][baseFeed].isApproved, "Feed not approved");
+        if (deployer == address(0)) revert DeployerNotFound();
+        if (!_feeds[deployer][baseFeed].isApproved) revert FeedNotApproved();
         address[] storage tokens = _feeds[deployer][baseFeed].associatedTokens;
         for (uint i = 0; i < tokens.length; i++) {
             if (tokens[i] == tokenAddress) {
@@ -296,28 +301,25 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
 
     /// @dev helper function to call a function on a deployer
     function _callDeployer(address deployer, bytes memory data) private {
-        require(
-            deployerToQuoteToken[deployer] != address(0),
-            "Deployer not found"
-        );
+        if (deployerToQuoteToken[deployer] == address(0))
+            revert DeployerNotFound();
 
         (bool success, bytes memory returnData) = deployer.call(data);
         if (!success) {
             // If there is return data, try to extract and revert with the original error message
             if (returnData.length > 0) {
-                // Look for revert reason and bubble it up if present
                 assembly {
                     let returnDataSize := mload(returnData)
                     revert(add(32, returnData), returnDataSize)
                 }
             } else {
-                revert("Call to deployer failed");
+                revert CallToDeployerFailed();
             }
         }
     }
 
     function _validFeed(address feedAddress) private view {
-        require(feedAddress != address(0), "Invalid Feed");
+        if (feedAddress == address(0)) revert InvalidAddress();
         AggregatorV3Interface(feedAddress).latestRoundData();
     }
 
@@ -325,11 +327,9 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         // NB: totalSupply >= 0 is a way to ensure that the token is valid by calling
         // the totalSupply function. We don't care if the supply is 0, as long as the function
         // doesn't revert.
-        require(
-            tokenAddress != address(0) &&
-                IERC20(tokenAddress).totalSupply() >= 0,
-            "Invalid token"
-        );
+        if (
+            tokenAddress == address(0) || IERC20(tokenAddress).totalSupply() < 0
+        ) revert InvalidAddress();
     }
 
     function getDeployers() external view returns (address[] memory) {
@@ -349,7 +349,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address baseFeed
     ) external view returns (Feed memory) {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
+        if (deployer == address(0)) revert DeployerNotFound();
         return _feeds[deployer][baseFeed];
     }
 
@@ -370,11 +370,9 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address baseFeed
     ) external view returns (address[] memory) {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
-        require(
-            _feeds[deployer][baseFeed].feedAddress != address(0),
-            "Feed does not exist"
-        );
+        if (deployer == address(0)) revert DeployerNotFound();
+        if (_feeds[deployer][baseFeed].feedAddress == address(0))
+            revert FeedDoesNotExist();
         return _feeds[deployer][baseFeed].associatedTokens;
     }
 
@@ -389,7 +387,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address baseFeed
     ) external view returns (bool) {
         address deployer = quoteTokenToDeployer[quoteToken];
-        require(deployer != address(0), "Deployer not found");
+        if (deployer == address(0)) revert DeployerNotFound();
         return _feeds[deployer][baseFeed].isApproved;
     }
 }
