@@ -24,7 +24,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     // deployer => baseFeed => Feed
     mapping(address => mapping(address => Feed)) private _feeds;
     // deployer => baseFeed[]
-    mapping(address => address[]) private _feedsList;
+    mapping(address => Feed[]) private _feedsList;
 
     // Mapping to store pending feeds
     Feed[] public feedsPending;
@@ -85,8 +85,12 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
             "Quote token already exists"
         );
         require(
+            deployerToQuoteToken[deployer] == address(0),
+            "Deployer already exists"
+        );
+        require(
             IHasQuoteToken(deployer).quoteToken() == quoteToken,
-            "Invalid quote token"
+            "Deployer.quoteToken() does not match quoteToken"
         );
 
         _deployers.push(deployer);
@@ -167,7 +171,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         address quoteToken = deployerToQuoteToken[deployer];
 
         _feeds[deployer][baseFeed] = pendingFeed;
-        _feedsList[deployer].push(baseFeed);
+        _feedsList[deployer].push(pendingFeed);
 
         // call adminApproveBaseOracle on deployer
         bytes memory data = abi.encodePacked(
@@ -208,10 +212,10 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         );
         _callDeployer(deployer, data);
 
-        address[] storage feedList = _feedsList[deployer];
+        Feed[] storage feedList = _feedsList[deployer];
         uint256 len = feedList.length;
         for (uint256 i = 0; i < len; i++) {
-            if (feedList[i] == baseFeed) {
+            if (feedList[i].feedAddress == baseFeed) {
                 feedList[i] = feedList[len - 1];
                 feedList.pop();
                 break;
@@ -325,13 +329,11 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         return _deployers;
     }
 
-    function getFeeds(
-        address deployer
-    ) external view returns (address[] memory) {
+    function getFeeds(address deployer) external view returns (Feed[] memory) {
         return _feedsList[deployer];
     }
 
-    function getFeed(
+    function getFeedByQuoteToken(
         address quoteToken,
         address baseFeed
     ) external view returns (Feed memory) {
@@ -340,6 +342,12 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         return _feeds[deployer][baseFeed];
     }
 
+    function getFeedByDeployer(
+        address deployer,
+        address baseFeed
+    ) external view returns (Feed memory) {
+        return _feeds[deployer][baseFeed];
+    }
     /**
      * @notice Returns all associated tokens for a feed
      * @param quoteToken The address of the quote token

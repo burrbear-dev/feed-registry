@@ -47,15 +47,20 @@ contract FeedRegistryIntegration is FeedRegistryTest {
         registry = FeedRegistry(address(proxy));
 
         mockFeed = new MockFeed();
+        mockFeed2 = new MockFeed();
         token1 = new MockToken("Token1", "TK1");
         token2 = new MockToken("Token2", "TK2");
         quoteToken = IERC20(IFXPoolDeployer(FXPOOL_DEPLOYER_USDC).quoteToken());
 
         deployer = IFXPoolDeployer(FXPOOL_DEPLOYER_USDC);
-
+        deployer2 = IFXPoolDeployer(FXPOOL_DEPLOYER_NECT);
         // transfer ownership to registry
         vm.startPrank(IOwnable(address(deployer)).owner());
         IOwnable(address(deployer)).transferOwnership(address(registry));
+        vm.stopPrank();
+
+        vm.startPrank(IOwnable(address(deployer2)).owner());
+        IOwnable(address(deployer2)).transferOwnership(address(registry));
         vm.stopPrank();
     }
 

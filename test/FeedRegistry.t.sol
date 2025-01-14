@@ -110,7 +110,9 @@ contract FeedRegistryTest is Test {
     Proxy public proxy;
 
     MockFeed public mockFeed;
+    MockFeed public mockFeed2;
     IFXPoolDeployer public deployer;
+    IFXPoolDeployer public deployer2;
     IERC20 public quoteToken;
     MockToken public token1;
     MockToken public token2;
@@ -139,6 +141,7 @@ contract FeedRegistryTest is Test {
         registry = FeedRegistry(address(proxy));
 
         mockFeed = new MockFeed();
+        mockFeed2 = new MockFeed();
         token1 = new MockToken("Token1", "TK1");
         token2 = new MockToken("Token2", "TK2");
         quoteToken = IERC20(address(new MockToken("QuoteToken", "QT")));
@@ -146,9 +149,14 @@ contract FeedRegistryTest is Test {
         MockFXPoolDeployer mockDeployer = new MockFXPoolDeployer(
             address(quoteToken)
         );
+        MockFXPoolDeployer mockDeployer2 = new MockFXPoolDeployer(
+            address(quoteToken)
+        );
         // transfer ownership to registry
         IOwnable(address(mockDeployer)).transferOwnership(address(registry));
+        IOwnable(address(mockDeployer2)).transferOwnership(address(registry));
         deployer = IFXPoolDeployer(address(mockDeployer));
+        deployer2 = IFXPoolDeployer(address(mockDeployer2));
     }
 
     function testAddDeployer() public {
@@ -189,6 +197,14 @@ contract FeedRegistryTest is Test {
         );
     }
 
+    function testCannotAddDuplicateDeployer() public {
+        registry.addDeployer(address(quoteToken), address(deployer));
+        vm.expectRevert("Deployer already exists");
+        registry.addDeployer(address(quoteToken), address(deployer));
+        vm.expectRevert("Quote token already exists");
+        registry.addDeployer(address(quoteToken), address(deployer2));
+    }
+
     function testSuggestApproveRemoveFeed() public {
         registry.addDeployer(address(quoteToken), address(deployer));
 
@@ -205,15 +221,30 @@ contract FeedRegistryTest is Test {
             tokens
         );
         registry.suggestFeed(address(quoteToken), address(mockFeed), tokens);
+        registry.suggestFeed(address(quoteToken), address(mockFeed2), tokens);
         vm.stopPrank();
 
         (, address feedAddress, bool isApproved) = registry.feedsPending(0);
         assertEq(feedAddress, address(mockFeed), "Feed is not pending");
         assertEq(isApproved, false, "Feed is approved");
 
+        (, address feedAddress2, bool isApproved2) = registry.feedsPending(1);
+        assertEq(feedAddress2, address(mockFeed2), "Feed2 is not pending");
+        assertEq(isApproved2, false, "Feed2 is approved");
+
         // admin can approve feed
         vm.startPrank(owner);
         registry.approveFeed(0);
+        vm.stopPrank();
+
+        // feed2 is still pending
+        (, feedAddress2, isApproved2) = registry.feedsPending(1);
+        assertEq(feedAddress2, address(mockFeed2), "Feed2 is not pending");
+        assertEq(isApproved2, false, "Feed2 is approved");
+
+        // admin can approve feed2
+        vm.startPrank(owner);
+        registry.approveFeed(1);
         vm.stopPrank();
 
         assertEq(
@@ -221,12 +252,28 @@ contract FeedRegistryTest is Test {
             true,
             "Feed is not approved"
         );
+        assertEq(
+            registry.isFeedApproved(address(quoteToken), address(mockFeed2)),
+            true,
+            "Feed2 is not approved"
+        );
 
-        FeedRegistry.Feed memory feed = registry.getFeed(
+        FeedRegistry.Feed memory feed = registry.getFeedByQuoteToken(
             address(quoteToken),
             address(mockFeed)
         );
-        assertEq(feed.feedAddress, address(mockFeed), "Feed is not approved");
+        assertEq(
+            feed.feedAddress,
+            address(mockFeed),
+            "[getFeedByQuoteToken] feed is not approved"
+        );
+
+        feed = registry.getFeedByDeployer(address(deployer), address(mockFeed));
+        assertEq(
+            feed.isApproved,
+            true,
+            "[getFeedByDeployer] feed is not approved"
+        );
 
         // user cannot suggest feed again
         vm.startPrank(user);
@@ -238,6 +285,21 @@ contract FeedRegistryTest is Test {
         vm.startPrank(owner);
         registry.removeFeed(address(quoteToken), address(mockFeed));
         vm.stopPrank();
+
+        assertEq(
+            registry.isFeedApproved(address(quoteToken), address(mockFeed)),
+            false,
+            "Feed is approved"
+        );
+        vm.startPrank(owner);
+        registry.removeFeed(address(quoteToken), address(mockFeed2));
+        vm.stopPrank();
+
+        assertEq(
+            registry.isFeedApproved(address(quoteToken), address(mockFeed2)),
+            false,
+            "Feed2 is approved"
+        );
     }
 
     function testCannotSuggestInvalidFeed() public {
@@ -332,6 +394,34 @@ contract FeedRegistryTest is Test {
         assertEq(associatedTokens[0], address(token2));
     }
 
+    function testFEInterface() public {
+        registry.addDeployer(address(quoteToken), address(deployer));
+
+        // Suggest and approve a feed first
+        address[] memory tokens = new address[](0);
+        vm.startPrank(user);
+        registry.suggestFeed(address(quoteToken), address(mockFeed), tokens);
+        registry.suggestFeed(address(quoteToken), address(mockFeed2), tokens);
+        vm.stopPrank();
+
+        registry.approveFeed(1);
+        registry.approveFeed(0);
+
+        address[] memory deployers = registry.getDeployers();
+        bool foundFeed = false;
+
+        for (uint256 i = 0; i < deployers.length; i++) {
+            FeedRegistry.Feed[] memory feeds = registry.getFeeds(deployers[i]);
+            for (uint256 j = 0; j < feeds.length; j++) {
+                if (feeds[j].feedAddress == address(mockFeed)) {
+                    foundFeed = true;
+                }
+                assertEq(feeds[j].isApproved, true, "Feed is not approved");
+            }
+        }
+        assertEq(foundFeed, true, "Feed is not found");
+    }
+
     function testUpgradeWorks() public {
         // version before upgrade
         assertEq(registry.version(), "1.0.0");
@@ -367,7 +457,7 @@ contract FeedRegistryTest is Test {
         );
         assertEq(
             registry
-                .getFeed(address(quoteToken), address(mockFeed))
+                .getFeedByQuoteToken(address(quoteToken), address(mockFeed))
                 .feedAddress,
             address(mockFeed),
             "Feed is not approved after upgrade"
