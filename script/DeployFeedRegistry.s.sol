@@ -74,6 +74,43 @@ contract DeployFeedRegistry is Script {
         vm.stopBroadcast();
     }
 
+    function deployBartioUpgrade(address _proxyAdminOwner) external {
+        address registryOwner = msg.sender;
+
+        FeedRegistry previousRegistry = FeedRegistry(
+            0x6Df961030Ef9c2e2d79AF42603e4ccc32B41Fd64
+        );
+
+        vm.startBroadcast();
+
+        FeedRegistry newRegistry = _deployFeedRegistry(
+            _proxyAdminOwner,
+            registryOwner
+        );
+
+        bytes memory data = abi.encodePacked(
+            bytes4(keccak256("transferOwnership(address)")),
+            abi.encode(address(newRegistry))
+        );
+
+        // transfer ownership of previous registry to new registry
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_HONEY, data);
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_NECT, data);
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_STGUSDC, data);
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_HETH, data);
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_HSOL, data);
+        previousRegistry.callDeployer(BARTIO_FXPOOLDEPLOYER_HTIA, data);
+
+        newRegistry.addDeployer(BARTIO_HONEY, BARTIO_FXPOOLDEPLOYER_HONEY);
+        newRegistry.addDeployer(BARTIO_NECT, BARTIO_FXPOOLDEPLOYER_NECT);
+        newRegistry.addDeployer(BARTIO_STGUSDC, BARTIO_FXPOOLDEPLOYER_STGUSDC);
+        newRegistry.addDeployer(BARTIO_HETH, BARTIO_FXPOOLDEPLOYER_HETH);
+        newRegistry.addDeployer(BARTIO_HSOL, BARTIO_FXPOOLDEPLOYER_HSOL);
+        newRegistry.addDeployer(BARTIO_HTIA, BARTIO_FXPOOLDEPLOYER_HTIA);
+
+        vm.stopBroadcast();
+    }
+
     function _deployFeedRegistry(
         address _proxyAdminOwner,
         address _registryOwner

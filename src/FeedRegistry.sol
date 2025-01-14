@@ -12,21 +12,27 @@ error QuoteTokenMismatch();
 error DeployerNotFound();
 error FeedAlreadyExists();
 error InvalidAddress();
-error FeedNotApproved();
 error TokenAlreadyAssociated();
+error FeedNotApproved();
 error FeedDoesNotExist();
 error CallToDeployerFailed();
 
 /**
  * @title FeedRegistry
- * @notice A registry for Chainlink price feeds with associated ERC20 tokens and FXPoolDeployer integration
+ * @notice A registry for Chainlink price feeds with associated ERC20 base tokens and FXPoolDeployer integration
  */
 contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     struct Feed {
         address deployerAddress;
         address feedAddress;
         bool isApproved;
-        address[] associatedTokens;
+        address[] baseTokens;
+    }
+
+    struct PendingBaseToken {
+        address quoteToken;
+        address baseFeed;
+        address baseToken;
     }
 
     // list of deployer addresses
@@ -38,30 +44,38 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     // deployer => baseFeed[]
     mapping(address => Feed[]) private _feedsList;
 
-    // Mapping to store pending feeds
-    Feed[] public feedsPending;
-
     // map deployer to quote token
     mapping(address => address) public deployerToQuoteToken;
     // map quote token to deployer
     mapping(address => address) public quoteTokenToDeployer;
 
+    // list of pending feeds
+    Feed[] public feedsPending;
+    // list of pending base tokens
+    PendingBaseToken[] public pendingBaseTokens;
+
     event FeedApproved(address indexed quoteToken, address indexed baseFeed);
-    event TokenAssociated(
+    event BaseTokenAdded(
         address indexed quoteToken,
         address indexed baseFeed,
-        address indexed tokenAddress
+        address indexed baseToken
     );
-    event TokenRemoved(
+    event BaseTokenRemoved(
         address indexed quoteToken,
         address indexed baseFeed,
-        address indexed tokenAddress
+        address indexed baseToken
     );
-    event FeedPendingWithTokens(
+    event FeedSuggested(
         address indexed suggester,
         address indexed quoteToken,
         address indexed baseFeed,
         address[] tokens
+    );
+    event BaseTokenSuggested(
+        address indexed suggester,
+        address indexed quoteToken,
+        address indexed baseFeed,
+        address baseToken
     );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -124,14 +138,15 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     }
 
     /**
-     * @notice Suggests a new feed to be added to the registry along with associated tokens
+     * @notice Suggests a new feed to be added to the registry along with associated base tokens
+     * @param quoteToken The address of the quote token
      * @param feedAddress The address of the Chainlink price feed
-     * @param associatedTokens Array of ERC20 token addresses to associate with the feed
+     * @param baseTokens Array of ERC20 base token addresses to associate with the feed
      */
     function suggestFeed(
         address quoteToken,
         address feedAddress,
-        address[] calldata associatedTokens
+        address[] calldata baseTokens
     ) external {
         address deployer = quoteTokenToDeployer[quoteToken];
         if (deployer == address(0)) revert DeployerNotFound();
@@ -144,9 +159,9 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         feed.latestRoundData(); // Will revert if not a valid feed
 
         // Verify all token addresses implement IERC20
-        for (uint256 i = 0; i < associatedTokens.length; i++) {
-            if (associatedTokens[i] == address(0)) revert InvalidAddress();
-            IERC20(associatedTokens[i]).totalSupply(); // Will revert if not a valid ERC20
+        for (uint256 i = 0; i < baseTokens.length; i++) {
+            if (baseTokens[i] == address(0)) revert InvalidAddress();
+            IERC20(baseTokens[i]).totalSupply(); // Will revert if not a valid ERC20
         }
 
         // Store pending tokens
@@ -155,20 +170,15 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
                 feedAddress: feedAddress,
                 deployerAddress: deployer,
                 isApproved: false,
-                associatedTokens: associatedTokens
+                baseTokens: baseTokens
             })
         );
 
-        emit FeedPendingWithTokens(
-            msg.sender,
-            quoteToken,
-            feedAddress,
-            associatedTokens
-        );
+        emit FeedSuggested(msg.sender, quoteToken, feedAddress, baseTokens);
     }
 
     /**
-     * @notice Approves a pending feed and its associated tokens
+     * @notice Approves a pending feed and its associated base tokens
      * @param _pendingIndex The index of the feed to approve
      */
     function approveFeed(uint256 _pendingIndex) external onlyOwner {
@@ -196,12 +206,12 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         delete feedsPending[_pendingIndex];
 
         emit FeedApproved(quoteToken, baseFeed);
-        uint256 len = pendingFeed.associatedTokens.length;
+        uint256 len = pendingFeed.baseTokens.length;
         for (uint256 i = 0; i < len; i++) {
-            emit TokenAssociated(
+            emit BaseTokenAdded(
                 quoteToken,
                 baseFeed,
-                pendingFeed.associatedTokens[i]
+                pendingFeed.baseTokens[i]
             );
         }
     }
@@ -236,52 +246,86 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     }
 
     /**
-     * @notice Associates an ERC20 token with an approved feed
+     * @notice Suggests a new base token for an approved feed
      * @param quoteToken The address of the quote token
      * @param baseFeed The address of the approved feed
-     * @param tokenAddress The address of the ERC20 token
+     * @param baseToken The address of the ERC20 base token to associate
      */
-    function associateToken(
+    function suggestBaseToken(
         address quoteToken,
         address baseFeed,
-        address tokenAddress
-    ) external onlyOwner {
-        _validToken(tokenAddress);
+        address baseToken
+    ) external {
+        _validToken(baseToken);
         address deployer = quoteTokenToDeployer[quoteToken];
         if (deployer == address(0)) revert DeployerNotFound();
 
         Feed memory feed = _feeds[deployer][baseFeed];
         if (!feed.isApproved) revert FeedNotApproved();
-        if (tokenAddress == address(0)) revert InvalidAddress();
 
-        // Check if token is already associated
-        address[] storage tokens = _feeds[deployer][baseFeed].associatedTokens;
-        for (uint i = 0; i < tokens.length; i++) {
-            if (tokens[i] == tokenAddress) revert TokenAlreadyAssociated();
+        // ensure token is not already associated
+        for (uint256 i = 0; i < feed.baseTokens.length; i++) {
+            if (feed.baseTokens[i] == baseToken)
+                revert TokenAlreadyAssociated();
         }
 
-        tokens.push(tokenAddress);
-        emit TokenAssociated(quoteToken, baseFeed, tokenAddress);
+        pendingBaseTokens.push(
+            PendingBaseToken({
+                quoteToken: quoteToken,
+                baseFeed: baseFeed,
+                baseToken: baseToken
+            })
+        );
+
+        emit BaseTokenSuggested(msg.sender, quoteToken, baseFeed, baseToken);
     }
 
-    function removeToken(
+    /**
+     * @notice Approves a pending base token
+     * @param _pendingIndex The index of the base token to approve
+     */
+    function approveBaseToken(uint256 _pendingIndex) external onlyOwner {
+        if (_pendingIndex >= pendingBaseTokens.length)
+            revert FeedDoesNotExist();
+
+        PendingBaseToken memory pending = pendingBaseTokens[_pendingIndex];
+        _validToken(pending.baseToken);
+        address deployer = quoteTokenToDeployer[pending.quoteToken];
+
+        if (!_feeds[deployer][pending.baseFeed].isApproved)
+            revert FeedNotApproved();
+
+        // Add the token to the feed's associated tokens
+        _feeds[deployer][pending.baseFeed].baseTokens.push(pending.baseToken);
+
+        // Clean up pending base token
+        delete pendingBaseTokens[_pendingIndex];
+
+        emit BaseTokenAdded(
+            pending.quoteToken,
+            pending.baseFeed,
+            pending.baseToken
+        );
+    }
+
+    function removeBaseToken(
         address quoteToken,
         address baseFeed,
-        address tokenAddress
+        address baseToken
     ) external onlyOwner {
         address deployer = quoteTokenToDeployer[quoteToken];
         if (deployer == address(0)) revert DeployerNotFound();
         if (!_feeds[deployer][baseFeed].isApproved) revert FeedNotApproved();
-        address[] storage tokens = _feeds[deployer][baseFeed].associatedTokens;
+        address[] storage tokens = _feeds[deployer][baseFeed].baseTokens;
         for (uint i = 0; i < tokens.length; i++) {
-            if (tokens[i] == tokenAddress) {
+            if (tokens[i] == baseToken) {
                 tokens[i] = tokens[tokens.length - 1];
                 tokens.pop();
                 break;
             }
         }
 
-        emit TokenRemoved(quoteToken, baseFeed, tokenAddress);
+        emit BaseTokenRemoved(quoteToken, baseFeed, baseToken);
     }
 
     /**
@@ -356,12 +400,12 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         return _feeds[deployer][baseFeed];
     }
     /**
-     * @notice Returns all associated tokens for a feed
+     * @notice Returns all base tokens for a feed
      * @param quoteToken The address of the quote token
      * @param baseFeed The address of the approved feed
-     * @return tokens Array of associated token addresses
+     * @return tokens Array of base token addresses
      */
-    function getAssociatedTokens(
+    function getBaseTokens(
         address quoteToken,
         address baseFeed
     ) external view returns (address[] memory) {
@@ -369,7 +413,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         if (deployer == address(0)) revert DeployerNotFound();
         if (_feeds[deployer][baseFeed].feedAddress == address(0))
             revert FeedDoesNotExist();
-        return _feeds[deployer][baseFeed].associatedTokens;
+        return _feeds[deployer][baseFeed].baseTokens;
     }
 
     /**

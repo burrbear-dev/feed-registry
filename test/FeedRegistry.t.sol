@@ -214,7 +214,7 @@ contract FeedRegistryTest is Test {
 
         vm.startPrank(user);
         vm.expectEmit(true, true, true, true);
-        emit FeedRegistry.FeedPendingWithTokens(
+        emit FeedRegistry.FeedSuggested(
             user,
             address(quoteToken),
             address(mockFeed),
@@ -318,7 +318,7 @@ contract FeedRegistryTest is Test {
         registry.approveFeed(0);
     }
 
-    function testAssociateRemoveToken() public {
+    function testSuggestRemoveBaseToken() public {
         registry.addDeployer(address(quoteToken), address(deployer));
 
         // Suggest and approve a feed first
@@ -329,7 +329,7 @@ contract FeedRegistryTest is Test {
 
         // cannot associate token to unapproved feed
         vm.expectRevert(FeedNotApproved.selector);
-        registry.associateToken(
+        registry.suggestBaseToken(
             address(quoteToken),
             address(mockFeed),
             address(token1)
@@ -339,19 +339,28 @@ contract FeedRegistryTest is Test {
 
         // Associate a new token
         vm.expectEmit(true, true, true, true);
-        emit FeedRegistry.TokenAssociated(
+        emit FeedRegistry.BaseTokenSuggested(
+            address(this),
             address(quoteToken),
             address(mockFeed),
             address(token1)
         );
 
-        registry.associateToken(
+        registry.suggestBaseToken(
             address(quoteToken),
             address(mockFeed),
             address(token1)
         );
 
-        address[] memory associatedTokens = registry.getAssociatedTokens(
+        address[] memory associatedTokens = registry.getBaseTokens(
+            address(quoteToken),
+            address(mockFeed)
+        );
+        assertEq(associatedTokens.length, 0);
+        // owner approves base token
+        registry.approveBaseToken(0);
+
+        associatedTokens = registry.getBaseTokens(
             address(quoteToken),
             address(mockFeed)
         );
@@ -360,19 +369,21 @@ contract FeedRegistryTest is Test {
 
         // cannot associate same token again
         vm.expectRevert(TokenAlreadyAssociated.selector);
-        registry.associateToken(
+        registry.suggestBaseToken(
             address(quoteToken),
             address(mockFeed),
             address(token1)
         );
 
         // can associate different token
-        registry.associateToken(
+        registry.suggestBaseToken(
             address(quoteToken),
             address(mockFeed),
             address(token2)
         );
-        associatedTokens = registry.getAssociatedTokens(
+        registry.approveBaseToken(1);
+
+        associatedTokens = registry.getBaseTokens(
             address(quoteToken),
             address(mockFeed)
         );
@@ -380,13 +391,13 @@ contract FeedRegistryTest is Test {
         assertEq(associatedTokens[0], address(token1));
         assertEq(associatedTokens[1], address(token2));
 
-        registry.removeToken(
+        registry.removeBaseToken(
             address(quoteToken),
             address(mockFeed),
             address(token1)
         );
 
-        associatedTokens = registry.getAssociatedTokens(
+        associatedTokens = registry.getBaseTokens(
             address(quoteToken),
             address(mockFeed)
         );
