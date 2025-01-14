@@ -85,10 +85,6 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
             "Quote token already exists"
         );
         require(
-            deployerToQuoteToken[deployer] == address(0),
-            "Deployer already exists"
-        );
-        require(
             IHasQuoteToken(deployer).quoteToken() == quoteToken,
             "Deployer.quoteToken() does not match quoteToken"
         );
