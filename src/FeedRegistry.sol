@@ -324,12 +324,8 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
     }
 
     function _validToken(address tokenAddress) private view {
-        // NB: totalSupply >= 0 is a way to ensure that the token is valid by calling
-        // the totalSupply function. We don't care if the supply is 0, as long as the function
-        // doesn't revert.
-        if (
-            tokenAddress == address(0) || IERC20(tokenAddress).totalSupply() < 0
-        ) revert InvalidAddress();
+        if (tokenAddress == address(0)) revert InvalidAddress();
+        IERC20(tokenAddress).totalSupply(); // Will revert if not a valid ERC20
     }
 
     function getDeployers() external view returns (address[] memory) {
