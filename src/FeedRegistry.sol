@@ -20,6 +20,7 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
 
     // list of deployer addresses
     address[] private _deployers;
+    address[] private _quoteTokens;
     // Mapping to store all feeds
     // deployer => baseFeed => Feed
     mapping(address => mapping(address => Feed)) private _feeds;
@@ -90,18 +91,28 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
         );
 
         _deployers.push(deployer);
+        _quoteTokens.push(quoteToken);
         deployerToQuoteToken[deployer] = quoteToken;
         quoteTokenToDeployer[quoteToken] = deployer;
     }
 
     function removeDeployer(address deployer) external onlyOwner {
-        delete quoteTokenToDeployer[deployerToQuoteToken[deployer]];
+        address quoteToken = deployerToQuoteToken[deployer];
+        delete quoteTokenToDeployer[quoteToken];
         delete deployerToQuoteToken[deployer];
         uint256 len = _deployers.length;
         for (uint256 i = 0; i < len; i++) {
             if (_deployers[i] == deployer) {
                 _deployers[i] = _deployers[len - 1];
                 _deployers.pop();
+                break;
+            }
+        }
+        len = _quoteTokens.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (_quoteTokens[i] == quoteToken) {
+                _quoteTokens[i] = _quoteTokens[len - 1];
+                _quoteTokens.pop();
                 break;
             }
         }
@@ -323,6 +334,10 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
 
     function getDeployers() external view returns (address[] memory) {
         return _deployers;
+    }
+
+    function getQuoteTokens() external view returns (address[] memory) {
+        return _quoteTokens;
     }
 
     function getFeeds(address deployer) external view returns (Feed[] memory) {
