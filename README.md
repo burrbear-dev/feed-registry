@@ -56,6 +56,12 @@ A feed must meet the following requirements to be approved:
 6. Both the feed address and any associated base tokens must be valid addresses (non-zero)
 7. All base tokens must implement the ERC20 interface
 
+## Deployed feeds
+
+| Chain            | Feed Registry Address                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Berachain bArtio | [0x952c430dCC00f623708d1CbBECe3A6f5741b1384](https://bartio.beratrail.io/address/0x952c430dCC00f623708d1CbBECe3A6f5741b1384) |
+
 ## Setup
 
 ```bash
