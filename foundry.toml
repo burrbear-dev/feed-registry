@@ -7,6 +7,13 @@ remappings = [
   "@openzeppelin-upgradeable/contracts=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/",
   "forge-std=dependencies/forge-std-1.9.5/src/",
 ]
+solc_version = "0.8.28+commit.7893614a"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+
+berachain = { key = "verifyContract", chain = 80094, url = "https://api.routescan.io/v2/network/mainnet/evm/80094/etherscan" }
+
 
 [soldeer]
 # whether soldeer manages remappings
