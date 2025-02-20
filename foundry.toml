@@ -3,29 +3,23 @@ src = "src"
 out = "out"
 libs = ["dependencies"]
 remappings = [
-  "@openzeppelin/contracts=dependencies/@openzeppelin-contracts-5.2.0-rc.1/",
-  "@openzeppelin-upgradeable/contracts=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/",
-  "forge-std=dependencies/forge-std-1.9.5/src/",
+  "@openzeppelin-contracts/=dependencies/@openzeppelin-contracts-5.2.0-rc.1",
+  "@openzeppelin-contracts-upgradeable/=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1",
+  "forge-std/=dependencies/forge-std-1.9.5/src/",
+  "@balancer-labs/=node_modules/@balancer-labs/",
+  "amm-contracts/=dependencies/amm-contracts/contracts/"
 ]
 solc_version = "0.8.28+commit.7893614a"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 
-berachain = { key = "verifyContract", chain = 80094, url = "https://api.routescan.io/v2/network/mainnet/evm/80094/etherscan" }
-
 
 [soldeer]
-# whether soldeer manages remappings
 remappings_generate = true
-# whether soldeer re-generates all remappings when installing, updating or uninstalling deps
-remappings_regenerate = true
-# whether to suffix the remapping with the version: `name-a.b.c`
+remappings_regenerate = false
 remappings_version = false
-# a prefix to add to the remappings ("@" would give `@name`)
 remappings_prefix = ""
-# where to store the remappings ("txt" for `remappings.txt` or "config" for `foundry.toml`)
-# ignored when `soldeer.toml` is used as config (uses `remappings.txt`)
 remappings_location = "txt"
 recursive_deps = true
 
@@ -33,6 +27,4 @@ recursive_deps = true
 forge-std = "1.9.5"
 "@openzeppelin-contracts" = "5.2.0-rc.1"
 "@openzeppelin-contracts-upgradeable" = "5.2.0-rc.1"
-openzeppelin-foundry-upgrades = "0.3.6"
-
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+amm-contracts = { git = "https://github.com/xave-finance/amm-contracts.git", branch = "master", version = "0.0.1" }

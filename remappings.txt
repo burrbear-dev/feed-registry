@@ -1,11 +1,5 @@
-@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.2.0-rc.1/
-@openzeppelin-upgradeable/contracts/=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/
-forge-std/=dependencies/forge-std-1.9.5/src/
-@openzeppelin-contracts-5.2.0-rc.1/=dependencies/@openzeppelin-contracts-5.2.0-rc.1/
-@openzeppelin-contracts-upgradeable-5.2.0-rc.1/=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/
-ds-test/=dependencies/openzeppelin-foundry-upgrades-0.3.6/lib/solidity-stringutils/lib/ds-test/src/
-forge-std-1.9.5/=dependencies/forge-std-1.9.5/src/
-forge-std/=dependencies/openzeppelin-foundry-upgrades-0.3.6/lib/forge-std/src/
-openzeppelin-foundry-upgrades-0.3.6/=dependencies/openzeppelin-foundry-upgrades-0.3.6/src/
-openzeppelin-foundry-upgrades/=dependencies/openzeppelin-foundry-upgrades-0.3.6/src/
-solidity-stringutils/=dependencies/openzeppelin-foundry-upgrades-0.3.6/lib/solidity-stringutils/
+@balancer-labs/=node_modules/@balancer-labs/
+@openzeppelin-contracts-upgradeable/=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/
+@openzeppelin-contracts/=dependencies/@openzeppelin-contracts-5.2.0-rc.1/
+amm-contracts/=dependencies/amm-contracts-0.0.1/
+forge-std/=dependencies/forge-std-1.9.5/
