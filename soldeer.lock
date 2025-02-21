@@ -1,16 +1,8 @@
 [[dependencies]]
-name = "@openzeppelin-contracts"
-version = "5.2.0-rc.1"
-url = "https://soldeer-revisions.s3.amazonaws.com/@openzeppelin-contracts/5_2_0-rc_1_18-12-2024_19:26:33_contracts.zip"
-checksum = "0430f56c556a4864cb2c0f28edbd497304a1e367d30dd07942778bef3a0f7a5f"
-integrity = "17e24d71e2995a505f428ff1e4b514723175d8c6f7b84db6a96cfa31bc73fe23"
-
-[[dependencies]]
-name = "@openzeppelin-contracts-upgradeable"
-version = "5.2.0-rc.1"
-url = "https://soldeer-revisions.s3.amazonaws.com/@openzeppelin-contracts-upgradeable/5_2_0-rc_1_18-12-2024_19:26:38_contracts-upgradeable.zip"
-checksum = "ad1c8f384694f30173c55395c9e146d7b4e1ba0cfed415038ee9ab30abded639"
-integrity = "9ab06bab65cc0e586edaa6e560491480a3107d847178e87c56a4223dfb5231f7"
+name = "amm-contracts"
+version = "0.0.1"
+git = "https://github.com/xave-finance/amm-contracts.git"
+rev = "eb690e43878ba4fdb8afe7f1c656ae6210c3c9ff"
 
 [[dependencies]]
 name = "forge-std"

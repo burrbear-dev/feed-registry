@@ -4,5 +4,6 @@
 
 ```bash
 forge soldeer install
+npm install
 forge build
 ```

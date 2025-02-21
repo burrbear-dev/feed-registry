@@ -1,5 +1,4 @@
-@balancer-labs/=node_modules/@balancer-labs/
-@openzeppelin-contracts-upgradeable/=dependencies/@openzeppelin-contracts-upgradeable-5.2.0-rc.1/
-@openzeppelin-contracts/=dependencies/@openzeppelin-contracts-5.2.0-rc.1/
 amm-contracts/=dependencies/amm-contracts-0.0.1/
 forge-std/=dependencies/forge-std-1.9.5/
+@balancer-labs/=node_modules/@balancer-labs/
+@openzeppelin/=node_modules/@openzeppelin/
