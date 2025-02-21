@@ -1,6 +1,8 @@
 # soldeer dependencies
 dependencies/
 
+node_modules/
+
 # forge cache
 cache/
 out/
