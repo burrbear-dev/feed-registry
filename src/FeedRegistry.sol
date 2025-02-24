@@ -2,10 +2,13 @@
 pragma solidity ^0.7.6;
 
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/TransparentUpgradeableProxy.sol";
+import "@openzeppelin/contracts/proxy/ProxyAdmin.sol";
 import "@openzeppelin/contracts/utils/EnumerableSet.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import "amm-contracts/contracts/FXPoolDeployer.sol";
+import "amm-contracts/contracts/assimilators/BaseToUsdAssimilator.sol";
+import "amm-contracts/contracts/assimilators/UsdcToUsdAssimilator.sol";
 
 /**
  * @title FeedRegistry
@@ -15,13 +18,13 @@ contract FeedRegistry is OwnableUpgradeable {
     using EnumerableSet for EnumerableSet.AddressSet;
     using EnumerableSet for EnumerableSet.UintSet;
 
-    address public feedRegistry;
+    address public chainLnkFeedRegistry;
 
-    EnumerableSet.AddressSet private _deployers;
+    EnumerableSet.AddressSet internal _deployers;
 
-    EnumerableSet.AddressSet private _approvedFeeds;
+    EnumerableSet.AddressSet internal _approvedFeeds;
 
-    EnumerableSet.AddressSet private _pendingFeeds;
+    EnumerableSet.AddressSet internal _pendingFeeds;
     // deployer => list of baseFeed
     mapping(address => EnumerableSet.AddressSet) internal _deployerFeeds;
     // quoteToken => deployer
@@ -31,9 +34,20 @@ contract FeedRegistry is OwnableUpgradeable {
 
     event FeedApproved(address indexed quoteToken, address indexed baseFeed);
 
-    function __FeedRegistry_init(address _feedRegistry) internal initializer {
+    function __FeedRegistry_init(address _chainLnkFeedRegistry, address _fxPoolDeployerImpl) internal initializer {
+        require(_chainLnkFeedRegistry != address(0) && _fxPoolDeployerImpl != address(0), "Invalid address");
+
+        chainLnkFeedRegistry = _chainLnkFeedRegistry;
+        fxPoolDeployerImpl = _fxPoolDeployerImpl;
+
+        _upgrader = new ProxyAdmin(address(this));
         __Ownable_init();
-        feedRegistry = _feedRegistry;
+    }
+
+    function setFXPoolDeployerImplementation(address _fxPoolDeployerNewImpl) external onlyOwner {
+        require(_fxPoolDeployerImpl != address(0) && _fxPoolDeployerNewImpl != fxPoolDeployerImpl, "Invalid address");
+
+        fxPoolDeployerImpl = _fxPoolDeployerNewImpl;
     }
 
     /**
@@ -54,37 +68,71 @@ contract FeedRegistry is OwnableUpgradeable {
      * @notice Approves a pending feed
      * @param baseFeed The address of the Chainlink price feed
      * @param quoteToken The address of the quote token
+     * @param vault Balancer Vault address
      */
-    function approveFeed(address baseFeed, address quoteToken) external onlyOwner {
+    function approveFeed(address baseFeed, address quoteToken, address vault) external onlyOwner {
+        require(_isTokenValid(baseToken), "Invalid address");
+
         require(_isTokenValid(quoteToken), "Invalid address");
 
         require(_pendingFeeds.contains(baseFeed), "Feed does not exist");
 
-        address deployer = quoteTokenToDeployer[quoteToken];
+        address _deployer = quoteTokenToDeployer[quoteToken];
 
-        if (!_deployers.contains(deployer)) {
-            // deploy new fx pool deployer using proxy
-            // set deployer with new deployed address
-            // update quoteTokenToDeployer[quoteToken]
-            // add deployer to the list
+        if (!_deployers.contains(_deployer)) {
+            _deployer = _deployNewFXPoolDeployer(baseFeed, quoteToken, vault);
+
+            _deployers.add(_deployer);
+
+            quoteTokenToDeployer[quoteToken] = _deployer;
         }
+
         _pendingFeeds.remove(baseFeed);
         _approvedFeeds.add(baseFeed);
 
-        _deployerFeeds[deployer].add(baseFeed);
+        _deployerFeeds[_deployer].add(baseFeed);
 
         // call adminApproveBaseOracle on deployer
         bytes memory data = abi.encodePacked(
             bytes4(keccak256("adminApproveBaseOracle(address)")),
             abi.encode(baseFeed)
         );
-        _callDeployer(deployer, data);
+        _callDeployer(_deployer, data);
 
         emit FeedApproved(quoteToken, baseFeed);
     }
 
+    function _deployNewFXPoolDeployer(
+        address baseFeed,
+        address quoteToken,
+        address vault
+    ) internal returns (address _deployer) {
+        BaseToUsdAssimilator _baseAssimilatorTemplate = new BaseToUsdAssimilator();
+
+        UsdcToUsdAssimilator _quoteAssimilator = new UsdcToUsdAssimilator();
+
+        _quoteAssimilator.initialize(baseFeed, quoteToken);
+
+        // deploy a new proxy of fx pool deployer
+        TransparentUpgradeableProxy _fxPoolDeployerProxy = new TransparentUpgradeableProxy(
+            fxPoolDeployerImpl,
+            address(_upgrader),
+            ""
+        );
+        _deployer = address(_fxPoolDeployerProxy);
+        // initialize  the proxy contract
+        IFXPoolDeployer(_deployer).initialize(
+            vault,
+            quoteToken,
+            address(_quoteAssimilator),
+            address(_baseAssimilatorTemplate)
+        );
+
+        // call FXPoolDeployerTracker.broadcastNewDeployer()
+    }
+
     /// @dev helper function to call a function on a deployer
-    function _callDeployer(address deployer, bytes memory data) private {
+    function _callDeployer(address deployer, bytes memory data) internal {
         (bool success, bytes memory returnData) = deployer.call(data);
         if (!success) {
             // If there is return data, try to extract and revert with the original error message
@@ -99,7 +147,7 @@ contract FeedRegistry is OwnableUpgradeable {
         }
     }
 
-    function _isTokenValid(address tokenAddress) private view returns (bool) {
+    function _isTokenValid(address tokenAddress) internal view returns (bool) {
         if (tokenAddress == address(0)) return false;
         try IERC20(tokenAddress).totalSupply() returns (uint256) {
             return true;
@@ -108,7 +156,7 @@ contract FeedRegistry is OwnableUpgradeable {
         }
     }
 
-    function _isFeedValid(address feedAddress) private view returns (bool) {
+    function _isFeedValid(address feedAddress) internal view returns (bool) {
         if (feedAddress == address(0)) return false;
         return IFeedRegistry(feedRegistry).isFeedEnabled(feedAddress);
     }
@@ -116,4 +164,17 @@ contract FeedRegistry is OwnableUpgradeable {
 
 interface IFeedRegistry {
     function isFeedEnabled(address aggregator) external view returns (bool);
+}
+
+interface IFXPoolDeployer {
+    function initialize(
+        address _vault,
+        address _quoteToken,
+        address _quoteAssimilator,
+        address _baseAssimilatorTemplate
+    ) external;
+}
+
+interface FXPoolDeployerTracker {
+    function broadcastNewDeployer(address _quoteToken, address _deployer) external returns (bytes32 key);
 }
