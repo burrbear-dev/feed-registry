@@ -1,353 +1,239 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.16;
+pragma solidity ^0.7.6;
 
-import "@openzeppelin-upgradeable/contracts/access/AccessControlUpgradeable.sol";
-import "@openzeppelin-upgradeable/contracts/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/TransparentUpgradeableProxy.sol";
+import "@openzeppelin/contracts/proxy/ProxyAdmin.sol";
+import "@openzeppelin/contracts/utils/EnumerableSet.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./interfaces/AggregatorV3Interface.sol";
+import "@openzeppelin/contracts/math/Math.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
 
-error DeployerAlreadyExists();
-error QuoteTokenAlreadyExists();
-error QuoteTokenMismatch();
-error DeployerNotFound();
-error FeedAlreadyExists();
-error InvalidAddress();
-error TokenAlreadyAssociated();
-error FeedNotApproved();
-error FeedDoesNotExist();
-error CallToDeployerFailed();
+import { IOracle } from "amm-contracts/contracts/core/interfaces/IOracle.sol";
+import { BaseToUsdAssimilator } from "amm-contracts/contracts/assimilators/BaseToUsdAssimilator.sol";
+import { UsdcToUsdAssimilator } from "amm-contracts/contracts/assimilators/UsdcToUsdAssimilator.sol";
 
 /**
  * @title FeedRegistry
  * @notice A registry for Chainlink price feeds with associated ERC20 base tokens and FXPoolDeployer integration
  */
-contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
-    struct Feed {
-        address deployerAddress;
-        address feedAddress;
-        bool isApproved;
-        address[] baseTokens;
-    }
+contract FeedRegistry is OwnableUpgradeable {
+    using Math for uint256;
+    using SafeMath for uint256;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
-    struct PendingBaseToken {
-        address quoteToken;
-        address baseFeed;
-        address baseToken;
-    }
+    ProxyAdmin internal _upgrader;
+    address public chainLnkFeedRegistry;
+    address internal fxPoolDeployerImpl;
 
-    // list of deployer addresses
-    address[] private _deployers;
-    address[] private _quoteTokens;
-    // Mapping to store all feeds
-    // deployer => baseFeed => Feed
-    mapping(address => mapping(address => Feed)) private _feeds;
-    // deployer => baseFeed[]
-    mapping(address => Feed[]) private _feedsList;
-
-    // map deployer to quote token
-    mapping(address => address) public deployerToQuoteToken;
-    // map quote token to deployer
+    // list of deployer proxy addresses
+    EnumerableSet.AddressSet internal _deployers;
+    // list of approved chainlink feeds
+    EnumerableSet.AddressSet internal _approvedFeeds;
+    // list of pending chainlink feeds
+    EnumerableSet.AddressSet internal _pendingFeeds;
+    // deployer => list of baseFeed
+    mapping(address => EnumerableSet.AddressSet) internal _deployerFeeds;
+    // quoteToken => deployer
     mapping(address => address) public quoteTokenToDeployer;
 
-    // list of pending feeds
-    Feed[] public feedsPending;
-    // list of pending base tokens
-    PendingBaseToken[] public pendingBaseTokens;
-
+    event FeedSuggested(address indexed suggester, address indexed baseFeed);
     event FeedApproved(address indexed quoteToken, address indexed baseFeed);
-    event BaseTokenAdded(
-        address indexed quoteToken,
-        address indexed baseFeed,
-        address indexed baseToken
-    );
-    event BaseTokenRemoved(
-        address indexed quoteToken,
-        address indexed baseFeed,
-        address indexed baseToken
-    );
-    event FeedSuggested(
-        address indexed suggester,
-        address indexed quoteToken,
-        address indexed baseFeed,
-        address[] tokens
-    );
-    event BaseTokenSuggested(
-        address indexed suggester,
-        address indexed quoteToken,
-        address indexed baseFeed,
-        address baseToken
-    );
+    event FXPoolDeployerUpgraded(address indexed fxPoolDeployerNewImpl);
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        // see Initializable.sol: To prevent the implementation contract
-        // from being used, you should invoke the {_disableInitializers} function
-        // in the constructor to automatically lock it when it is deployed
-        _disableInitializers();
-    }
+    function __FeedRegistry_init(address _chainLnkFeedRegistry, address _fxPoolDeployerImpl) internal initializer {
+        require(_chainLnkFeedRegistry != address(0) && _fxPoolDeployerImpl != address(0), "Invalid address");
 
-    function initialize(address initialOwner) public initializer {
-        __Ownable_init(initialOwner);
-        _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
-    }
+        chainLnkFeedRegistry = _chainLnkFeedRegistry;
+        fxPoolDeployerImpl = _fxPoolDeployerImpl;
 
-    function version() external pure virtual returns (string memory) {
-        return "1.0.0";
-    }
-
-    function addDeployer(
-        address quoteToken,
-        address deployer
-    ) external onlyOwner {
-        _validToken(quoteToken);
-        if (deployer == address(0)) revert InvalidAddress();
-        if (quoteToken == address(0)) revert InvalidAddress();
-        if (deployerToQuoteToken[deployer] != address(0))
-            revert DeployerAlreadyExists();
-        if (quoteTokenToDeployer[quoteToken] != address(0))
-            revert QuoteTokenAlreadyExists();
-        if (IHasQuoteToken(deployer).quoteToken() != quoteToken)
-            revert QuoteTokenMismatch();
-
-        _deployers.push(deployer);
-        _quoteTokens.push(quoteToken);
-        deployerToQuoteToken[deployer] = quoteToken;
-        quoteTokenToDeployer[quoteToken] = deployer;
-    }
-
-    function removeDeployer(address deployer) external onlyOwner {
-        address quoteToken = deployerToQuoteToken[deployer];
-        delete quoteTokenToDeployer[quoteToken];
-        delete deployerToQuoteToken[deployer];
-        uint256 len = _deployers.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (_deployers[i] == deployer) {
-                _deployers[i] = _deployers[len - 1];
-                _deployers.pop();
-                break;
-            }
-        }
-        len = _quoteTokens.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (_quoteTokens[i] == quoteToken) {
-                _quoteTokens[i] = _quoteTokens[len - 1];
-                _quoteTokens.pop();
-                break;
-            }
-        }
+        _upgrader = new ProxyAdmin();
+        __Ownable_init();
     }
 
     /**
-     * @notice Suggests a new feed to be added to the registry along with associated base tokens
+     * @notice upgrade the fx pool deployer to a new implementation
+     * @param _fxPoolDeployerNewImpl address of the new implementation
+     * @param offset pagination start up place
+     * @param limit size of the listing page
+     */
+    function upgradeFXPoolDeployers(address _fxPoolDeployerNewImpl, uint256 offset, uint256 limit) external onlyOwner {
+        require(_fxPoolDeployerNewImpl != address(0), "Invalid address");
+
+        require(Address.isContract(_fxPoolDeployerNewImpl), "Invalid address");
+
+        if (_fxPoolDeployerNewImpl != fxPoolDeployerImpl) fxPoolDeployerImpl = _fxPoolDeployerNewImpl;
+
+        uint256 to = (offset.add(limit)).min(_deployers.length()).max(offset);
+
+        for (uint256 i = offset; i < to; i++) {
+            _upgrader.upgrade(TransparentUpgradeableProxy(payable(_deployers.at(i))), _fxPoolDeployerNewImpl);
+        }
+
+        emit FXPoolDeployerUpgraded(_fxPoolDeployerNewImpl);
+    }
+
+    /**
+     * @notice Suggests a new feed to be added to the registry
+     * @param baseFeed The address of the Chainlink price feed
+     */
+    function suggestFeed(address baseFeed) external {
+        require(_isFeedValid(baseFeed), "Invalid address");
+
+        require(!_approvedFeeds.contains(baseFeed), "Feed already exists");
+
+        _pendingFeeds.add(baseFeed);
+
+        emit FeedSuggested(msg.sender, baseFeed);
+    }
+
+    /**
+     * @notice Approves a pending feed
+     * @param baseFeed The address of the Chainlink price feed
      * @param quoteToken The address of the quote token
-     * @param feedAddress The address of the Chainlink price feed
-     * @param baseTokens Array of ERC20 base token addresses to associate with the feed
+     * @param vault Balancer Vault address
      */
-    function suggestFeed(
-        address quoteToken,
-        address feedAddress,
-        address[] calldata baseTokens
-    ) external {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-        _validFeed(feedAddress);
-        if (_feeds[deployer][feedAddress].deployerAddress != address(0))
-            revert FeedAlreadyExists();
+    function approveFeed(address baseFeed, address quoteToken, address vault) external onlyOwner {
+        require(_isTokenValid(quoteToken), "Invalid address");
 
-        // Verify that the address implements AggregatorV3Interface
-        AggregatorV3Interface feed = AggregatorV3Interface(feedAddress);
-        feed.latestRoundData(); // Will revert if not a valid feed
+        require(vault != address(0), "Invalid address");
 
-        // Verify all token addresses implement IERC20
-        for (uint256 i = 0; i < baseTokens.length; i++) {
-            if (baseTokens[i] == address(0)) revert InvalidAddress();
-            IERC20(baseTokens[i]).totalSupply(); // Will revert if not a valid ERC20
+        require(_pendingFeeds.contains(baseFeed), "Feed does not exist");
+
+        address _deployer = quoteTokenToDeployer[quoteToken];
+
+        if (!_deployers.contains(_deployer)) {
+            _deployer = _deployNewFXPoolDeployer(baseFeed, quoteToken, vault);
+
+            _deployers.add(_deployer);
+
+            quoteTokenToDeployer[quoteToken] = _deployer;
         }
 
-        // Store pending tokens
-        feedsPending.push(
-            Feed({
-                feedAddress: feedAddress,
-                deployerAddress: deployer,
-                isApproved: false,
-                baseTokens: baseTokens
-            })
-        );
+        _pendingFeeds.remove(baseFeed);
+        _approvedFeeds.add(baseFeed);
 
-        emit FeedSuggested(msg.sender, quoteToken, feedAddress, baseTokens);
-    }
-
-    /**
-     * @notice Approves a pending feed and its associated base tokens
-     * @param _pendingIndex The index of the feed to approve
-     */
-    function approveFeed(uint256 _pendingIndex) external onlyOwner {
-        if (_pendingIndex >= feedsPending.length) revert FeedDoesNotExist();
-
-        Feed memory pendingFeed = feedsPending[_pendingIndex];
-        address baseFeed = pendingFeed.feedAddress;
-        if (baseFeed == address(0)) revert FeedDoesNotExist();
-        pendingFeed.isApproved = true;
-
-        address deployer = pendingFeed.deployerAddress;
-        address quoteToken = deployerToQuoteToken[deployer];
-
-        _feeds[deployer][baseFeed] = pendingFeed;
-        _feedsList[deployer].push(pendingFeed);
+        _deployerFeeds[_deployer].add(baseFeed);
 
         // call adminApproveBaseOracle on deployer
         bytes memory data = abi.encodePacked(
             bytes4(keccak256("adminApproveBaseOracle(address)")),
             abi.encode(baseFeed)
         );
-        _callDeployer(deployer, data);
-
-        // Clean up pending tokens storage
-        delete feedsPending[_pendingIndex];
+        _callDeployer(_deployer, data);
 
         emit FeedApproved(quoteToken, baseFeed);
-        uint256 len = pendingFeed.baseTokens.length;
-        for (uint256 i = 0; i < len; i++) {
-            emit BaseTokenAdded(
-                quoteToken,
-                baseFeed,
-                pendingFeed.baseTokens[i]
-            );
-        }
     }
 
-    function removeFeed(
-        address quoteToken,
-        address baseFeed
-    ) external onlyOwner {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
+    /**
+     * @notice list the registered deployers
+     * @param offset pagination start up place
+     * @param limit size of the listing page
+     * @return _deployerArr array of deployer addresses
+     */
+    function listDeployers(uint256 offset, uint256 limit) external view returns (address[] memory _deployerArr) {
+        uint256 to = (offset.add(limit)).min(_deployers.length()).max(offset);
 
-        Feed memory feed = _feeds[deployer][baseFeed];
-        if (!feed.isApproved) revert FeedNotApproved();
-        delete _feeds[deployer][baseFeed];
+        _deployerArr = new address[](to - offset);
 
-        // call adminDisapproveBaseOracle on deployer
-        bytes memory data = abi.encodePacked(
-            bytes4(keccak256("adminDisapproveBaseOracle(address)")),
-            abi.encode(baseFeed)
-        );
-        _callDeployer(deployer, data);
-
-        Feed[] storage feedList = _feedsList[deployer];
-        uint256 len = feedList.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (feedList[i].feedAddress == baseFeed) {
-                feedList[i] = feedList[len - 1];
-                feedList.pop();
-                break;
-            }
+        for (uint256 i = offset; i < to; i++) {
+            _deployerArr[i - offset] = _deployers.at(i);
         }
     }
 
     /**
-     * @notice Suggests a new base token for an approved feed
-     * @param quoteToken The address of the quote token
-     * @param baseFeed The address of the approved feed
-     * @param baseToken The address of the ERC20 base token to associate
+     * @notice Returns number of registered deployers
      */
-    function suggestBaseToken(
-        address quoteToken,
+    function countDeployers() external view returns (uint256) {
+        return _deployers.length();
+    }
+
+    /**
+     * @notice list the registered feeds (approved/pending)
+     * @param approved true => get approved feeds, false => get pending feeds
+     * @param offset pagination start up place
+     * @param limit size of the listing page
+     * @return _feedArr array of feed addresses
+     */
+    function listFeeds(bool approved, uint256 offset, uint256 limit) external view returns (address[] memory _feedArr) {
+        EnumerableSet.AddressSet storage _set = approved ? _approvedFeeds : _pendingFeeds;
+
+        uint256 to = (offset.add(limit)).min(_set.length()).max(offset);
+
+        _feedArr = new address[](to - offset);
+
+        for (uint256 i = offset; i < to; i++) {
+            _feedArr[i - offset] = _set.at(i);
+        }
+    }
+
+    /**
+     * @notice Returns number of registered feeds (approved/pending)
+     * @param approved true => get approved feeds count, false => get pending feeds count
+     */
+    function countFeeds(bool approved) external view returns (uint256) {
+        return approved ? _approvedFeeds.length() : _pendingFeeds.length();
+    }
+
+    /**
+     * @notice get approved feeds by quote token
+     * @param quoteToken address of the quoteToken
+     * @return _deployerFeedsArr array of feed addresses
+     */
+    function getFeedsByQuoteToken(address quoteToken) external view returns (address[] memory _deployerFeedsArr) {
+        address _deployer = quoteTokenToDeployer[quoteToken];
+        return _getFeedByDeployer(_deployer);
+    }
+
+    /**
+     * @notice get approved feeds by deployer
+     * @param deployer address of the fx pool deployer
+     * @return _deployerFeedsArr array of feed addresses
+     */
+    function getFeedsByDeployer(address deployer) external view returns (address[] memory _deployerFeedsArr) {
+        return _getFeedByDeployer(deployer);
+    }
+
+    /**
+     * @notice Checks if a feed is approved
+     * @param baseFeed The address of the feed
+     * @return bool True if the feed is approved
+     */
+    function isFeedApproved(address baseFeed) external view returns (bool) {
+        return _approvedFeeds.contains(baseFeed);
+    }
+
+    function _deployNewFXPoolDeployer(
         address baseFeed,
-        address baseToken
-    ) external {
-        _validToken(baseToken);
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-
-        Feed memory feed = _feeds[deployer][baseFeed];
-        if (!feed.isApproved) revert FeedNotApproved();
-
-        // ensure token is not already associated
-        for (uint256 i = 0; i < feed.baseTokens.length; i++) {
-            if (feed.baseTokens[i] == baseToken)
-                revert TokenAlreadyAssociated();
-        }
-
-        pendingBaseTokens.push(
-            PendingBaseToken({
-                quoteToken: quoteToken,
-                baseFeed: baseFeed,
-                baseToken: baseToken
-            })
-        );
-
-        emit BaseTokenSuggested(msg.sender, quoteToken, baseFeed, baseToken);
-    }
-
-    /**
-     * @notice Approves a pending base token
-     * @param _pendingIndex The index of the base token to approve
-     */
-    function approveBaseToken(uint256 _pendingIndex) external onlyOwner {
-        if (_pendingIndex >= pendingBaseTokens.length)
-            revert FeedDoesNotExist();
-
-        PendingBaseToken memory pending = pendingBaseTokens[_pendingIndex];
-        _validToken(pending.baseToken);
-        address deployer = quoteTokenToDeployer[pending.quoteToken];
-
-        if (!_feeds[deployer][pending.baseFeed].isApproved)
-            revert FeedNotApproved();
-
-        // Add the token to the feed's associated tokens
-        _feeds[deployer][pending.baseFeed].baseTokens.push(pending.baseToken);
-
-        // Clean up pending base token
-        delete pendingBaseTokens[_pendingIndex];
-
-        emit BaseTokenAdded(
-            pending.quoteToken,
-            pending.baseFeed,
-            pending.baseToken
-        );
-    }
-
-    function removeBaseToken(
         address quoteToken,
-        address baseFeed,
-        address baseToken
-    ) external onlyOwner {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-        if (!_feeds[deployer][baseFeed].isApproved) revert FeedNotApproved();
-        address[] storage tokens = _feeds[deployer][baseFeed].baseTokens;
-        for (uint i = 0; i < tokens.length; i++) {
-            if (tokens[i] == baseToken) {
-                tokens[i] = tokens[tokens.length - 1];
-                tokens.pop();
-                break;
-            }
-        }
+        address vault
+    ) internal returns (address _deployer) {
+        BaseToUsdAssimilator _baseAssimilatorTemplate = new BaseToUsdAssimilator();
 
-        emit BaseTokenRemoved(quoteToken, baseFeed, baseToken);
-    }
+        UsdcToUsdAssimilator _quoteAssimilator = new UsdcToUsdAssimilator();
 
-    /**
-     * @notice Allow owner to call functions on a deployer.
-     * @dev This is useful for calling adminApproveBaseOracle and adminDisapproveBaseOracle
-     * on the deployer contract but also for transferring ownership of the deployer
-     * contract if ever needed.
-     * @param deployer The address of the deployer
-     * @param data The data to call the function with
-     */
-    function callDeployer(
-        address deployer,
-        bytes memory data
-    ) external onlyOwner {
-        _callDeployer(deployer, data);
+        _quoteAssimilator.initialize(IOracle(baseFeed), IERC20(quoteToken));
+
+        // deploy a new proxy of fx pool deployer
+        TransparentUpgradeableProxy _fxPoolDeployerProxy = new TransparentUpgradeableProxy(
+            fxPoolDeployerImpl,
+            address(_upgrader),
+            ""
+        );
+        _deployer = address(_fxPoolDeployerProxy);
+        // initialize  the proxy contract
+        IFXPoolDeployer(_deployer).initialize(
+            vault,
+            quoteToken,
+            address(_quoteAssimilator),
+            address(_baseAssimilatorTemplate)
+        );
+
+        // call FXPoolDeployerTracker.broadcastNewDeployer()
     }
 
     /// @dev helper function to call a function on a deployer
-    function _callDeployer(address deployer, bytes memory data) private {
-        if (deployerToQuoteToken[deployer] == address(0))
-            revert DeployerNotFound();
-
+    function _callDeployer(address deployer, bytes memory data) internal {
         (bool success, bytes memory returnData) = deployer.call(data);
         if (!success) {
             // If there is return data, try to extract and revert with the original error message
@@ -357,81 +243,49 @@ contract FeedRegistry is AccessControlUpgradeable, OwnableUpgradeable {
                     revert(add(32, returnData), returnDataSize)
                 }
             } else {
-                revert CallToDeployerFailed();
+                revert("Call to deployer failed");
             }
         }
     }
 
-    function _validFeed(address feedAddress) private view {
-        if (feedAddress == address(0)) revert InvalidAddress();
-        AggregatorV3Interface(feedAddress).latestRoundData();
+    function _isTokenValid(address tokenAddress) internal view returns (bool) {
+        if (tokenAddress == address(0)) return false;
+        try IERC20(tokenAddress).totalSupply() returns (uint256) {
+            return true;
+        } catch {
+            return false;
+        }
     }
 
-    function _validToken(address tokenAddress) private view {
-        if (tokenAddress == address(0)) revert InvalidAddress();
-        IERC20(tokenAddress).totalSupply(); // Will revert if not a valid ERC20
+    function _isFeedValid(address feedAddress) internal view returns (bool) {
+        if (feedAddress == address(0)) return false;
+        return IFeedRegistry(chainLnkFeedRegistry).isFeedEnabled(feedAddress);
     }
 
-    function getDeployers() external view returns (address[] memory) {
-        return _deployers;
-    }
+    function _getFeedByDeployer(address deployer) internal view returns (address[] memory _deployerFeedsArr) {
+        uint256 _deployerFeedsLength = _deployerFeeds[deployer].length();
 
-    function getQuoteTokens() external view returns (address[] memory) {
-        return _quoteTokens;
-    }
+        _deployerFeedsArr = new address[](_deployerFeedsLength);
 
-    function getFeeds(address deployer) external view returns (Feed[] memory) {
-        return _feedsList[deployer];
-    }
-
-    function getFeedByQuoteToken(
-        address quoteToken,
-        address baseFeed
-    ) external view returns (Feed memory) {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-        return _feeds[deployer][baseFeed];
-    }
-
-    function getFeedByDeployer(
-        address deployer,
-        address baseFeed
-    ) external view returns (Feed memory) {
-        return _feeds[deployer][baseFeed];
-    }
-    /**
-     * @notice Returns all base tokens for a feed
-     * @param quoteToken The address of the quote token
-     * @param baseFeed The address of the approved feed
-     * @return tokens Array of base token addresses
-     */
-    function getBaseTokens(
-        address quoteToken,
-        address baseFeed
-    ) external view returns (address[] memory) {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-        if (_feeds[deployer][baseFeed].feedAddress == address(0))
-            revert FeedDoesNotExist();
-        return _feeds[deployer][baseFeed].baseTokens;
-    }
-
-    /**
-     * @notice Checks if a feed is approved
-     * @param quoteToken The address of the quote token
-     * @param baseFeed The address of the approved feed
-     * @return bool True if the feed is approved
-     */
-    function isFeedApproved(
-        address quoteToken,
-        address baseFeed
-    ) external view returns (bool) {
-        address deployer = quoteTokenToDeployer[quoteToken];
-        if (deployer == address(0)) revert DeployerNotFound();
-        return _feeds[deployer][baseFeed].isApproved;
+        for (uint256 i = 0; i < _deployerFeedsLength; i++) {
+            _deployerFeedsArr[i] = _deployerFeeds[deployer].at(i);
+        }
     }
 }
 
-interface IHasQuoteToken {
-    function quoteToken() external view returns (address);
+interface IFeedRegistry {
+    function isFeedEnabled(address aggregator) external view returns (bool);
+}
+
+interface IFXPoolDeployer {
+    function initialize(
+        address _vault,
+        address _quoteToken,
+        address _quoteAssimilator,
+        address _baseAssimilatorTemplate
+    ) external;
+}
+
+interface FXPoolDeployerTracker {
+    function broadcastNewDeployer(address _quoteToken, address _deployer) external returns (bytes32 key);
 }
